@@ -126,6 +126,46 @@ scripts/install-shims.sh          shim generation, the levels, the bypass
 scripts/healthcheck.sh            dashboard liveness probe
 ```
 
+## CI
+
+`.github/workflows/build-push.yml` builds, **verifies**, then pushes to Docker
+Hub. Pull requests build and verify but never push.
+
+The verify gate is the point of the workflow. Almost everything this image adds
+fails silently — a shim that falls through to the unfiltered binary looks
+exactly like a working one — so CI builds amd64, loads it, runs `make verify`,
+and boots a container under the same capability set `compose.yaml` uses,
+failing on any permission error during s6 init. Only then does it push.
+
+Configure once, in **Settings → Secrets and variables → Actions**:
+
+| Kind | Name | Value |
+|---|---|---|
+| Variable | `DOCKERHUB_REPOSITORY` | e.g. `damyr/hermes-agent` |
+| Secret | `DOCKERHUB_USERNAME` | your Docker Hub user |
+| Secret | `DOCKERHUB_TOKEN` | an access token, **not** your password |
+
+The repository is a *variable* rather than a secret on purpose: as a secret it
+would be masked, and every log line naming the image would read `***`.
+
+Create the token at Docker Hub → Account Settings → Personal access tokens,
+scoped **Read & Write** — nothing here needs Delete.
+
+Tags produced: `latest` on `main`, `sha-<short>` on every push, and
+`v1.2.3` / `1.2` from a `v*` git tag. Builds attach **provenance and an SBOM**,
+which is what makes the digest-and-checksum pinning checkable by whoever pulls
+the image rather than only by whoever built it.
+
+Builds are `linux/amd64` by default — what the VPS runs and what the image is
+tested on. arm64 works (`install-rtk.sh` handles it, the base is multi-arch)
+but is QEMU-emulated on GitHub runners, so it is opt-in: run the workflow
+manually and set *Target platforms* to `linux/amd64,linux/arm64`, or change the
+`PLATFORMS` default. The same dispatch form can build at `aggressive` shim
+level.
+
+Upstream Hermes is MIT-licensed, so publishing a derived image is fine; keep
+the base image's licence notice intact.
+
 ## Maintenance
 
 ```sh

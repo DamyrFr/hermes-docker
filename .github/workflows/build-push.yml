@@ -1,0 +1,228 @@
+# Build the image, prove it works, then push it to Docker Hub.
+#
+# The verify step is not ceremony. Most of what this image adds -- the rtk
+# shims, the stripped setuid bits, the promise that no runtime env is baked in
+# -- fails *silently*: a shim that falls through to the unfiltered binary and a
+# working shim look identical from the outside. So the amd64 image is built and
+# loaded first, `make verify` runs against it, and only then does anything get
+# pushed.
+name: build-push
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    # Docs-only edits do not change the image.
+    paths-ignore:
+      - "**.md"
+      - ".gitignore"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      shim_level:
+        description: "rtk shim level to build"
+        type: choice
+        options: [safe, aggressive, none]
+        default: safe
+      platforms:
+        description: "Target platforms"
+        default: linux/amd64
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Where the image is pushed. Set this as a repository *variable* (Settings ->
+  # Secrets and variables -> Actions -> Variables), e.g. "damyr/hermes-agent".
+  # Deliberately a variable and not a secret: masking it would turn every log
+  # line that names the image into "***".
+  DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
+
+  # amd64 only by default -- it is what the VPS runs and what the image is
+  # tested on. arm64 works (install-rtk.sh handles it and the base is
+  # multi-arch), but it is QEMU-emulated here, so opt in via workflow_dispatch
+  # or by changing this rather than paying for it on every push.
+  PLATFORMS: ${{ inputs.platforms || 'linux/amd64' }}
+  SHIM_LEVEL: ${{ inputs.shim_level || 'safe' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+
+      - name: Validate the compose file
+        run: |
+          # compose interpolates from .env; without it HERMES_BIND_ADDR is
+          # empty and the port mapping is malformed, which is a config error
+          # rather than the syntax error we are actually looking for here.
+          cp .env.example .env
+          docker compose config --quiet
+          echo "compose: OK"
+
+      - name: Fail if the image bakes runtime env
+        run: |
+          # The Dockerfile is meant to declare no ENV at all -- every runtime
+          # variable comes from compose.yaml and .env. Catch a regression here,
+          # where the diff is still in front of a reviewer.
+          if grep -qE '^[[:space:]]*ENV[[:space:]]' Dockerfile; then
+            echo "::error file=Dockerfile::Dockerfile declares ENV; runtime configuration belongs in compose.yaml"
+            grep -nE '^[[:space:]]*ENV[[:space:]]' Dockerfile
+            exit 1
+          fi
+          echo "no ENV in Dockerfile: OK"
+
+  build:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the push target is configured
+        # Only matters when we are actually going to push. Failing here beats
+        # building for ten minutes and falling over at the login step.
+        if: github.event_name != 'pull_request'
+        run: |
+          if [ -z "${DOCKERHUB_REPOSITORY}" ]; then
+            echo "::error::Set the DOCKERHUB_REPOSITORY repository variable (e.g. damyr/hermes-agent)."
+            exit 1
+          fi
+          echo "pushing to ${DOCKERHUB_REPOSITORY}"
+
+      - uses: docker/setup-qemu-action@v3
+        if: contains(env.PLATFORMS, 'arm')
+
+      - uses: docker/setup-buildx-action@v3
+
+      # ── Build for the runner's own arch and load it, so the image can
+      #    actually be executed by the verify step below. A multi-platform
+      #    build produces a manifest list, which `--load` cannot handle, hence
+      #    two build steps sharing one cache.
+      - name: Build amd64 image for verification
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          build-args: RTK_SHIM_LEVEL=${{ env.SHIM_LEVEL }}
+          tags: hermes-agent-rtk:ci
+          load: true
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify the built image
+        run: make verify IMAGE=hermes-agent-rtk:ci
+
+      - name: Smoke-test that the container still boots
+        run: |
+          # `make verify` proves rtk and the shims are right. This proves the
+          # hardening did not cost us a working container: the same capability
+          # set compose.yaml uses, checked for permission failures during s6
+          # init. Boot problems from cap_drop show up here and nowhere else.
+          mkdir -p /tmp/ci-data && chmod 777 /tmp/ci-data
+          docker run -d --name ci-boot \
+            --security-opt no-new-privileges \
+            --cap-drop ALL \
+            --cap-add CHOWN --cap-add FOWNER --cap-add DAC_OVERRIDE \
+            --cap-add SETUID --cap-add SETGID --cap-add KILL \
+            --pids-limit 512 \
+            -e HERMES_DASHBOARD=1 \
+            -e HERMES_DASHBOARD_HOST=0.0.0.0 \
+            -e HERMES_DASHBOARD_PORT=9119 \
+            -e HERMES_DASHBOARD_BASIC_AUTH_USERNAME=ci \
+            -e HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=ci-test-password \
+            -e "HERMES_DASHBOARD_BASIC_AUTH_SECRET=$(openssl rand -hex 32)" \
+            -e HERMES_WRITE_SAFE_ROOT=/opt/data \
+            -v /tmp/ci-data:/opt/data \
+            hermes-agent-rtk:ci gateway run
+
+          # s6 init, a config migration and the dashboard bind all happen
+          # before anything listens; poll rather than guess at a sleep.
+          for i in $(seq 1 30); do
+            if docker exec ci-boot /opt/rtk/bin/healthcheck.sh 2>/dev/null; then
+              echo "healthcheck passed after ${i}0s"
+              break
+            fi
+            if [ "$i" = "30" ]; then
+              echo "::error::container never became healthy"
+              docker logs ci-boot | tail -50
+              exit 1
+            fi
+            sleep 10
+          done
+
+          if docker logs ci-boot 2>&1 | grep -iE "permission denied|operation not permitted" | grep -v shutdownd; then
+            echo "::error::capability set is too tight; see the matches above"
+            exit 1
+          fi
+          echo "boot smoke test: OK"
+
+      - name: Collect container logs on failure
+        if: failure()
+        run: docker logs ci-boot 2>&1 | tail -100 || true
+
+      - name: Tear down the smoke test
+        if: always()
+        run: docker rm -f ci-boot || true
+
+      # ── Push ────────────────────────────────────────────────
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        if: github.event_name != 'pull_request'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_REPOSITORY }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ env.PLATFORMS }}
+          build-args: RTK_SHIM_LEVEL=${{ env.SHIM_LEVEL }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Ship a signed build record and an SBOM alongside the image. The
+          # whole point of pinning the base by digest and the rtk tarball by
+          # SHA-256 is knowing what is inside; these make that checkable by
+          # whoever pulls it, not just by whoever built it.
+          provenance: mode=max
+          sbom: true
+
+      - name: Summary
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo "### Pushed"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo "Platforms: \`${PLATFORMS}\` · shim level: \`${SHIM_LEVEL}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
