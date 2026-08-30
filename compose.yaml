@@ -64,10 +64,6 @@ services:
       - SETGID
       - KILL
 
-    # A runaway tool -- fork bomb, a build that spawns per-core jobs on a box
-    # this small -- takes the container down instead of the host.
-    pids_limit: 512
-
     ulimits:
       nofile:
         soft: 4096
@@ -147,11 +143,19 @@ services:
 
     shm_size: "${HERMES_SHM_SIZE:-256m}"
 
+    # Every resource ceiling lives here, in one block. The top-level
+    # `pids_limit:` spelling is the same setting as `deploy.resources.limits.pids`
+    # and Compose refuses a project that sets both -- so this file uses the
+    # deploy form throughout rather than mixing the two.
+    #
+    # pids: a runaway tool -- fork bomb, or a build that spawns per-core jobs on
+    # a box this small -- takes the container down instead of the host.
     deploy:
       resources:
         limits:
           memory: "${HERMES_MEMORY_LIMIT:-1200m}"
           cpus: "${HERMES_CPU_LIMIT:-1.5}"
+          pids: 512
 
     # Capped here rather than relying on the daemon default: an agent that logs
     # every tool call fills a small VPS's disk faster than anything else on it.
