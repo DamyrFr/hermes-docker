@@ -141,12 +141,19 @@ Configure once, in **Settings → Secrets and variables → Actions**:
 
 | Kind | Name | Value |
 |---|---|---|
-| Variable | `DOCKERHUB_REPOSITORY` | e.g. `damyr/hermes-agent` |
+| Variable *(or Secret)* | `DOCKERHUB_REPOSITORY` | e.g. `damyr/hermes-agent` |
 | Secret | `DOCKERHUB_USERNAME` | your Docker Hub user |
 | Secret | `DOCKERHUB_TOKEN` | an access token, **not** your password |
 
-The repository is a *variable* rather than a secret on purpose: as a secret it
-would be masked, and every log line naming the image would read `***`.
+> **The Variables and Secrets tabs are separate namespaces.** A value added
+> under Secrets is invisible to `vars.*` and vice versa — which produces a
+> confusing "not set" failure for a value you can see in the UI. The workflow
+> therefore reads `DOCKERHUB_REPOSITORY` from **either** tab.
+
+Prefer the **Variables** tab for it: it is not a credential, and as a secret it
+gets masked, so every log line naming the image — including the pushed tags in
+the run summary — renders as `***`. The build still works either way; the
+workflow prints a warning when it had to fall back to the secret.
 
 Create the token at Docker Hub → Account Settings → Personal access tokens,
 scoped **Read & Write** — nothing here needs Delete.

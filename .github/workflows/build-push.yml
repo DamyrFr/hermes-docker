@@ -37,11 +37,10 @@ permissions:
   contents: read
 
 env:
-  # Where the image is pushed. Set this as a repository *variable* (Settings ->
-  # Secrets and variables -> Actions -> Variables), e.g. "damyr/hermes-agent".
-  # Deliberately a variable and not a secret: masking it would turn every log
-  # line that names the image into "***".
-  DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
+  # NOTE: DOCKERHUB_REPOSITORY is set on the `build` job, not here. Secrets and
+  # Variables are two separate stores, and the `secrets` context is not
+  # available to workflow-level `env` -- only job-level. Reading both requires
+  # being inside a job.
 
   # amd64 only by default -- it is what the VPS runs and what the image is
   # tested on. arm64 works (install-rtk.sh handles it and the base is
@@ -83,6 +82,19 @@ jobs:
   build:
     needs: lint
     runs-on: ubuntu-latest
+    env:
+      # Where the image is pushed, read from EITHER store. GitHub keeps
+      # Variables and Secrets in separate namespaces: `vars.X` cannot see a
+      # value set in the Secrets tab and vice versa, so a workflow that reads
+      # only one of them fails with "not set" for a value the operator can see
+      # sitting right there in the UI. Accept both and let placement be a
+      # preference rather than a trap.
+      #
+      # A Variable is still the better home -- see the warning in the step
+      # below -- but a Secret works.
+      DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY || secrets.DOCKERHUB_REPOSITORY }}
+      # Only used to tell the two sources apart for that warning.
+      DOCKERHUB_REPOSITORY_FROM_VAR: ${{ vars.DOCKERHUB_REPOSITORY }}
     steps:
       - uses: actions/checkout@v5
 
@@ -92,10 +104,19 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           if [ -z "${DOCKERHUB_REPOSITORY}" ]; then
-            echo "::error::Set the DOCKERHUB_REPOSITORY repository variable (e.g. damyr/hermes-agent)."
+            echo "::error::DOCKERHUB_REPOSITORY is not set in either store. Add it under Settings -> Secrets and variables -> Actions, in the *Variables* tab (preferred) or the *Secrets* tab, as e.g. damyr/hermes-agent. Note the two tabs are separate: a value in one is invisible to the other."
             exit 1
           fi
-          echo "pushing to ${DOCKERHUB_REPOSITORY}"
+
+          if [ -z "${DOCKERHUB_REPOSITORY_FROM_VAR}" ]; then
+            # Secrets are masked in logs, so the image name will render as ***
+            # in every line below -- including the pushed tags in the summary.
+            # Works fine, just harder to read.
+            echo "::warning::DOCKERHUB_REPOSITORY came from a Secret, so the image name is masked as *** in these logs. Moving it to the Variables tab makes the output readable; it is not a credential."
+            echo "pushing to the configured repository (masked)"
+          else
+            echo "pushing to ${DOCKERHUB_REPOSITORY}"
+          fi
 
       - uses: docker/setup-qemu-action@v3
         if: contains(env.PLATFORMS, 'arm')
