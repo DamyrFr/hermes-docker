@@ -1,0 +1,6 @@
+# Carries the dashboard password and any bot tokens.
+.env
+
+# The agent's state: config.yaml, sessions, memories, skills, logs, API keys.
+# Back this up out of band -- never into git.
+data/

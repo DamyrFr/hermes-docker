@@ -1,0 +1,10 @@
+# The build only needs scripts/ and the Dockerfile. Everything else -- above
+# all the data volume and the .env -- must never reach the build context: it
+# would be readable in the image history.
+*
+
+!scripts/
+!scripts/*.sh
+
+# AGENTS.md is bind-mounted read-only at runtime rather than copied in, so it
+# is intentionally absent here.

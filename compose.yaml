@@ -1,0 +1,171 @@
+# ─────────────────────────────────────────────────────────────
+# Hermes agent, hardened runtime.
+#
+# The image (see Dockerfile) carries rtk and a reduced attack surface. This
+# file carries everything an image cannot do to itself: dropping capabilities,
+# forbidding privilege escalation, capping processes, and binding the listener
+# somewhere that is not the public internet.
+#
+# Values written ${LIKE_THIS} come from the .env file beside this one. Copy
+# .env.example to .env and chmod 0600 it -- it holds the dashboard password.
+# ─────────────────────────────────────────────────────────────
+
+services:
+  hermes:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # `safe` shims developer tooling only. See scripts/install-shims.sh
+        # before reaching for `aggressive`.
+        RTK_SHIM_LEVEL: "${RTK_SHIM_LEVEL:-safe}"
+      # No `pull: true`. The base is pinned by digest, so there is nothing to
+      # refresh: either the digest is in the local store or the build fetches
+      # exactly it.
+    image: "${HERMES_IMAGE:-hermes-agent-rtk:latest}"
+    container_name: "${HERMES_CONTAINER_NAME:-hermes}"
+    command: gateway run
+
+    # Survives a crash and a reboot. It is also what closes the boot race
+    # against tailscaled: if tailscale0 has no address yet, publishing to
+    # ${HERMES_BIND_ADDR} fails and Docker retries until the interface is up.
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+    # ── Privilege posture ────────────────────────────────────
+    # Nothing in this container may gain privileges through an execve, which
+    # closes the setuid escalation path for good -- the image strips the bits,
+    # this stops them mattering even if a future base image adds them back.
+    #
+    # It does not interfere with s6-overlay dropping root to UID 10000:
+    # no-new-privileges blocks *gaining* privilege, not shedding it.
+    security_opt:
+      - no-new-privileges:true
+
+    # Default Docker hands a container 14 capabilities it will never use --
+    # NET_RAW (ARP/DNS spoofing on the bridge), MKNOD, SYS_CHROOT and so on.
+    # This drops the lot and adds back only what s6-overlay needs to set up
+    # /opt/data and drop to the unprivileged user:
+    #
+    #   CHOWN, FOWNER, DAC_OVERRIDE -- cont-init fixes ownership on the volume
+    #   SETUID, SETGID              -- s6-setuidgid drops root to UID 10000
+    #   KILL                        -- the supervisor signals its own services
+    #
+    # If a base image bump makes the container fail during init, run it once
+    # with this block commented out to confirm it is a capability, then add the
+    # single missing one rather than restoring the default set.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+      - KILL
+
+    # A runaway tool -- fork bomb, a build that spawns per-core jobs on a box
+    # this small -- takes the container down instead of the host.
+    pids_limit: 512
+
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 8192
+
+    # read_only: true is the obvious next step and is left off on purpose: s6
+    # writes to /run and /var/run, and Playwright wants an executable /tmp.
+    # Turning it on means adding those back as tmpfs and re-testing a cold
+    # start, which is a change to make deliberately, not to inherit:
+    #
+    #   read_only: true
+    #   tmpfs:
+    #     - /run:rw,noexec,nosuid,size=64m
+    #     - /tmp:rw,exec,nosuid,size=256m
+
+    # ── Ports ────────────────────────────────────────────────
+    # Bound to the tailnet address, never 0.0.0.0. A published port bound to
+    # one address cannot be reached on the public interface, which is what
+    # stops Docker's own iptables rules from punching through the host
+    # firewall. HERMES_BIND_ADDR must be the 100.64.0.0/10 address.
+    ports:
+      - "${HERMES_BIND_ADDR}:${HERMES_DASHBOARD_PORT:-9119}:${HERMES_DASHBOARD_PORT:-9119}"
+
+    volumes:
+      # Every piece of durable state -- config.yaml, .env, API keys, sessions,
+      # memories, skills, logs, and rtk's savings ledger -- lives under this
+      # one mount. Back up this directory and you have backed up the agent.
+      - "${HERMES_DATA_DIR:-./data}:/opt/data"
+
+      # Read-only, and the reason is not paranoia: this is the file that tells
+      # the agent to use rtk. A writable mount would let the agent edit its own
+      # instructions, which is both a token-savings regression and a prompt
+      # injection sink.
+      - "./agents/AGENTS.md:/opt/data/AGENTS.md:ro"
+
+      # NOT mounted: /var/run/docker.sock. It is host-root-equivalent -- the
+      # agent could start a privileged container mounting /. If a workload
+      # genuinely needs container isolation, set terminal.backend and give
+      # Hermes a scoped socket proxy, not this one.
+
+    environment:
+      PUID: "${HERMES_UID:-10000}"
+      PGID: "${HERMES_GID:-10000}"
+      TZ: "${TZ:-Europe/Paris}"
+
+      # ── Dashboard ────────────────────────────────────────
+      HERMES_DASHBOARD: "1"
+      # Must be 0.0.0.0 for the port mapping to reach it. The container is
+      # alone on its own bridge and the host side is tailnet-only, so this is
+      # not the exposure it looks like.
+      HERMES_DASHBOARD_HOST: "0.0.0.0"
+      HERMES_DASHBOARD_PORT: "${HERMES_DASHBOARD_PORT:-9119}"
+      # A non-loopback dashboard with no auth provider fails closed at startup
+      # rather than serving an unauthenticated admin surface.
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: "${HERMES_DASHBOARD_BASIC_AUTH_USERNAME}"
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: "${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD}"
+      # Keeps dashboard sessions valid across a container restart.
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: "${HERMES_DASHBOARD_BASIC_AUTH_SECRET}"
+
+      # ── Agent guardrails ─────────────────────────────────
+      # Confine the agent's writes to the data volume. Hermes always refuses
+      # ~/.ssh, ~/.aws, ~/.kube and credential stores; this narrows it further
+      # to the one directory that is meant to change, so a tool call cannot
+      # rewrite the application tree at /opt/hermes.
+      HERMES_WRITE_SAFE_ROOT: "/opt/data"
+
+      # Belt and braces against a stray --yolo: this is the environment form of
+      # the flag that disables command approval entirely.
+      HERMES_YOLO_MODE: "0"
+
+      # ── rtk ──────────────────────────────────────────────
+      # Set to 1 to make every shim exec the real binary instead. The escape
+      # hatch for "something in the container started parsing output wrong" --
+      # a restart, not a rebuild.
+      RTK_SHIM_DISABLED: "${RTK_SHIM_DISABLED:-}"
+      RTK_TELEMETRY_DISABLED: "1"
+
+    shm_size: "${HERMES_SHM_SIZE:-256m}"
+
+    deploy:
+      resources:
+        limits:
+          memory: "${HERMES_MEMORY_LIMIT:-1200m}"
+          cpus: "${HERMES_CPU_LIMIT:-1.5}"
+
+    # Capped here rather than relying on the daemon default: an agent that logs
+    # every tool call fills a small VPS's disk faster than anything else on it.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  default:
+    name: "${HERMES_BRIDGE_NAME:-hermes0}-net"
+    driver: bridge
+    driver_opts:
+      # Fixed interface name so the host firewall can write an accept rule for
+      # it instead of matching Compose's generated br-<hash>.
+      com.docker.network.bridge.name: "${HERMES_BRIDGE_NAME:-hermes0}"

@@ -1,0 +1,109 @@
+# ─────────────────────────────────────────────────────────────
+# Recommended security settings for the agent itself.
+#
+# This is a REFERENCE, not a file the stack reads. Hermes writes its own
+# config at /opt/data/config.yaml through an interactive wizard, and it owns
+# that file -- overwriting it from outside would fight the wizard on every
+# converge and clobber whatever the agent has learned about its own setup.
+#
+# The gap this closes is real, though: everything below defaults to something
+# more permissive than you probably want on a box reachable over a tailnet,
+# and none of it is visible in compose.yaml. Merge these keys into
+# /opt/data/config.yaml by hand once, then diff against this file when you
+# upgrade.
+#
+#   docker compose exec hermes sh -c 'cat /opt/data/config.yaml'
+#
+# Source: https://hermes-agent.nousresearch.com/docs/user-guide/security
+# ─────────────────────────────────────────────────────────────
+
+approvals:
+  # smart (default) auto-approves what it judges safe. `manual` asks before
+  # every command. On an agent reachable from a chat platform, manual is the
+  # setting that matches the threat model -- smart is a heuristic, and the
+  # thing it is guarding is a shell.
+  mode: manual
+  timeout: 300
+
+  # Scheduled runs have no human present to answer a prompt. Denying is the
+  # only answer that is not "approve anything, unattended, forever".
+  cron_mode: deny
+  single_query_mode: deny
+
+  mcp_reload_confirm: true
+  destructive_slash_confirm: true
+
+  # fnmatch globs, evaluated before the approval mode. These are the commands
+  # where "the model was confident" is not a good enough reason.
+  deny:
+    - "rm -rf /*"
+    - "* /etc/shadow*"
+    - "* /etc/sudoers*"
+    - "curl * | sh"
+    - "curl * | bash"
+    - "wget * | sh"
+    - "wget * | bash"
+    - "chmod -R 777 *"
+    - "docker run *--privileged*"
+    - "docker run *-v /:*"
+    - "* --yolo*"
+    - "tailscale *"
+
+# Patterns that skip the approval prompt. Keep this short and keep it to reads:
+# every entry here is a command the agent may run unattended, forever.
+command_allowlist:
+  - "ls *"
+  - "cat *"
+  - "rtk read *"
+  - "rtk ls *"
+  - "rtk grep *"
+  - "rtk git status*"
+  - "rtk git log*"
+  - "rtk git diff*"
+  - "git status*"
+  - "git log*"
+  - "git diff*"
+
+security:
+  # Blocks SSRF into the tailnet, the Docker bridge and cloud metadata
+  # endpoints. Default is already false; stated here so an upgrade that flips
+  # the default is a visible diff rather than a silent one.
+  allow_private_urls: false
+
+  website_blocklist:
+    enabled: true
+    domains: []
+
+  # Upstream's prompt-injection / content scanner.
+  tirith_enabled: true
+  tirith_timeout: 5
+  # Default is true -- a scanner timeout lets the content through. false trades
+  # availability for the guarantee that unscanned content never reaches the
+  # model. Choose knowingly.
+  tirith_fail_open: true
+
+  # When true, the agent may pip-install packages mid-conversation, which is
+  # arbitrary code execution sourced from whatever it decided it needed. The
+  # image already ships the packages this deployment uses.
+  allow_lazy_installs: false
+
+terminal:
+  # `local` runs tool commands in the agent's own container. That container is
+  # already capability-stripped and confined to /opt/data (see compose.yaml),
+  # which is why this is acceptable without mounting the Docker socket.
+  #
+  # Setting this to `docker` would nest a sandbox per tool call -- stronger
+  # isolation, but it needs a socket, and a bare socket mount is
+  # host-root-equivalent. Use a scoped socket proxy if you go that way.
+  backend: local
+
+  # Only these reach tool subprocesses. Anything omitted -- API keys above all
+  # -- stays out of the environment a shell command can read.
+  env_passthrough:
+    - PATH
+    - HOME
+    - LANG
+    - TERM
+    - TZ
+    - RTK_SHIM_DISABLED
+    - RTK_TELEMETRY_DISABLED
