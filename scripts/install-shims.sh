@@ -26,7 +26,13 @@
 set -euo pipefail
 
 LEVEL="${1:-safe}"
-SHIM_DIR="${SHIM_DIR:-/opt/rtk/shims}"
+
+# /opt/hermes/bin, not a directory of our own: the upstream image already puts
+# it first on PATH and it holds exactly one file (`hermes`), so dropping shims
+# here needs no PATH manipulation at all. That matters because PATH would
+# otherwise have to be re-declared at run time, where it is coupled to whatever
+# the base image's PATH happens to be that week.
+SHIM_DIR="${SHIM_DIR:-/opt/hermes/bin}"
 
 # Commands with an rtk subcommand that nothing in the image's boot or supervision
 # path invokes. Shimming these is close to free.
@@ -62,16 +68,12 @@ esac
 
 install -d -m 0755 -o root -g root "$SHIM_DIR"
 
-# PATH must not already contain the shim dir, or `command -v` below resolves the
-# wrapper we are about to write instead of the real binary.
-case ":${PATH}:" in
-  *":${SHIM_DIR}:"*)
-    echo "install-shims: $SHIM_DIR is already on PATH; refusing to resolve targets through it" >&2
-    exit 1
-    ;;
-esac
-
-created=0
+# Two phases on purpose. SHIM_DIR is itself on PATH -- that is the whole point
+# of using /opt/hermes/bin -- so every target has to be resolved BEFORE the
+# first shim is written. Interleaving the two would let a shim written earlier
+# in the loop shadow the real binary for a later lookup, and each shim would
+# end up pointing at another shim.
+declare -A targets=()
 skipped=()
 
 for cmd in "${commands[@]}"; do
@@ -82,6 +84,23 @@ for cmd in "${commands[@]}"; do
     continue
   fi
   real="$(readlink -f "$real")"
+
+  # A target inside SHIM_DIR means a previous run already shimmed this command
+  # and we are about to wrap a wrapper. Refuse rather than build a loop.
+  case "$real" in
+    "${SHIM_DIR}/"*)
+      echo "install-shims: '$cmd' already resolves to a shim ($real); refusing to wrap it" >&2
+      exit 1
+      ;;
+  esac
+
+  targets["$cmd"]="$real"
+done
+
+created=0
+
+for cmd in "${!targets[@]}"; do
+  real="${targets[$cmd]}"
 
   cat >"${SHIM_DIR}/${cmd}" <<EOF
 #!/bin/sh

@@ -42,9 +42,14 @@ verify: ## Smoke-test rtk and the shims inside the built image
 	@docker run --rm --entrypoint rtk $(IMAGE) --version
 	@echo "== shims resolve ahead of the real binaries =="
 	@docker run --rm --entrypoint sh $(IMAGE) -c 'command -v git; command -v docker' \
-	  | grep -q '^/opt/rtk/shims/' \
+	  | grep -q '^/opt/hermes/bin/' \
 	    && echo "OK: shims are first on PATH" \
 	    || { echo "FAIL: shims are not on PATH"; exit 1; }
+	@echo "== no image-level ENV was baked in =="
+	@docker run --rm --entrypoint sh $(IMAGE) -c 'echo "$$RTK_TELEMETRY_DISABLED"' \
+	  | grep -q . \
+	    && { echo "FAIL: image bakes runtime env; it belongs in compose.yaml"; exit 1; } \
+	    || echo "OK: runtime env comes from the run phase only"
 	@echo "== shim produces filtered output, not an error =="
 	@docker run --rm --entrypoint sh $(IMAGE) -c 'cd /tmp && git init -q r && cd r && git status' >/dev/null \
 	    && echo "OK: shimmed git works" \

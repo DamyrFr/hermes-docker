@@ -34,8 +34,14 @@ make restart
 [rtk](https://github.com/rtk-ai/rtk) is a CLI proxy that filters and summarises
 command output before it reaches the model. Claude Code wires it in with a
 `PreToolUse` hook; **Hermes has no equivalent interception point**, so this
-image uses `PATH` shims instead — wrappers in `/opt/rtk/shims` that sit ahead
-of `/usr/bin` and re-exec through rtk.
+image uses `PATH` shims instead — wrappers that sit ahead of `/usr/bin` and
+re-exec through rtk.
+
+They are installed into `/opt/hermes/bin`, which the base image already places
+first on `PATH` and which holds only the `hermes` launcher. So the image sets
+no `PATH` of its own: every environment variable this stack uses is declared in
+the run phase (`compose.yaml` + `.env`), never baked into a layer. Changing one
+is a restart, not a rebuild.
 
 That is a real trade-off, and worth understanding before you raise the level:
 

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 #
 # ─────────────────────────────────────────────────────────────
-# Hermes agent: rtk-instrumented and hardened.
+# Hermes agent: instrumented and hardened.
 #
 # Three things sit on top of the upstream image:
 #   1. rtk (github.com/rtk-ai/rtk) -- pinned, checksum-verified -- plus PATH
@@ -91,9 +91,13 @@ HEALTHCHECK --interval=30s --timeout=6s --start-period=180s --retries=3 \
     CMD ["/opt/rtk/bin/healthcheck.sh"]
 
 # ── rtk PATH shims ───────────────────────────────────────────
-# Last, and for two reasons: every RUN above uses the real `uv`, `find` and
-# `curl` unfiltered, and generating the shims requires a PATH that does not yet
-# contain them (install-shims.sh asserts this).
+# Last, so every RUN above uses the real `uv`, `find` and `curl` unfiltered.
+#
+# The shims land in /opt/hermes/bin, which the base image already puts first on
+# PATH. That is deliberate: no `ENV PATH` here, and nothing to re-declare at run
+# time. Setting PATH ourselves would either bake an image-level env var (this
+# stack keeps environment in the run phase) or force compose to restate the
+# base image's whole PATH, which silently rots when upstream changes it.
 #
 # `safe`       -- developer tooling only; nothing on the boot path. Default.
 # `aggressive` -- adds ls/grep/find/curl/wc/diff/pip/uv. Bigger savings, and a
@@ -104,23 +108,12 @@ COPY --chmod=0755 scripts/install-shims.sh /tmp/install-shims.sh
 RUN /tmp/install-shims.sh "${RTK_SHIM_LEVEL}" \
     && rm -f /tmp/install-shims.sh
 
-ENV PATH="/opt/rtk/shims:${PATH}"
+# No ENV block on purpose. Every runtime variable -- RTK_TELEMETRY_DISABLED,
+# RTK_SHIM_DISABLED, the HERMES_* settings -- is set in the run phase, from
+# compose.yaml and .env, so that changing one is a restart rather than a
+# rebuild and there is a single place to read the container's configuration.
 
-# rtk keeps its config and its savings ledger under the XDG directories, which
-# resolve from HOME. The upstream image already sets HOME=/opt/data, so both
-# land inside the mounted volume without any override here: `rtk gain` survives
-# a container recreate, and rtk never tries to write into the read-only
-# application tree at /opt/hermes.
-#
-# XDG_CONFIG_HOME/XDG_DATA_HOME are deliberately NOT set -- they would apply to
-# every process in the container, Hermes included, to relocate one tool.
-
-# Telemetry is opt-in upstream; this makes the "off" explicit rather than
-# inherited, so a future default flip cannot quietly start sending command
-# metadata off this host.
-ENV RTK_TELEMETRY_DISABLED=1
-
-LABEL org.opencontainers.image.title="hermes-agent-rtk" \
+LABEL org.opencontainers.image.title="hermes-agent-damyr" \
       org.opencontainers.image.description="Nous Research Hermes agent with rtk output filtering and a hardened runtime posture" \
       org.opencontainers.image.base.name="${HERMES_BASE}" \
       org.opencontainers.image.base.digest="${HERMES_BASE_DIGEST}" \
