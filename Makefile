@@ -3,8 +3,12 @@
 # worth using, because a shim that silently falls through to the unfiltered
 # binary looks exactly like a working container.
 
-COMPOSE ?= docker compose
-IMAGE   ?= hermes-agent-rtk:latest
+COMPOSE  ?= docker compose
+IMAGE    ?= hermes-agent-rtk:latest
+# Upstream tag every target builds on. CI overrides it with the git tag on a
+# release; locally there is rarely a reason to change it.
+BASE_TAG ?= latest
+export HERMES_BASE_TAG = $(BASE_TAG)
 
 .DEFAULT_GOAL := help
 .PHONY: help build up down restart logs shell verify data-dir base-digest rtk-digest lint
@@ -63,9 +67,11 @@ verify: ## Smoke-test rtk and the shims inside the built image
 	    && echo "OK: no setuid/setgid binaries" \
 	    || { echo "FAIL: setuid binaries present"; exit 1; }
 
-base-digest: ## Print the current multi-arch digest of the upstream :latest tag
-	@curl -sS https://hub.docker.com/v2/repositories/nousresearch/hermes-agent/tags/latest \
-	  | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["digest"], "pushed", d["last_updated"])'
+base-digest: ## Resolve an upstream tag to its digest (BASE_TAG=latest)
+	@curl -sS https://hub.docker.com/v2/repositories/nousresearch/hermes-agent/tags/$(BASE_TAG) \
+	  | python3 -c 'import sys,json; d=json.load(sys.stdin); \
+	      sys.exit("no such upstream tag: $(BASE_TAG)") if "digest" not in d \
+	      else print(d["digest"], "pushed", d["last_updated"])'
 
 rtk-digest: ## Print the checksums of the latest rtk release
 	@curl -sSL https://api.github.com/repos/rtk-ai/rtk/releases/latest \

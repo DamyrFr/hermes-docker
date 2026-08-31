@@ -13,6 +13,12 @@ on:
     branches: [main]
     tags: ["v*"]
     # Docs-only edits do not change the image.
+    #
+    # Caveat that matters now that a git tag is the release mechanism: GitHub
+    # evaluates these filters for tag pushes too, against the tagged commit.
+    # Tagging a commit that only touched a .md file therefore builds nothing.
+    # Tag a commit that touches the image, or run this workflow manually
+    # against the tag ref -- the dispatch path below handles that case.
     paths-ignore:
       - "**.md"
       - ".gitignore"
@@ -28,6 +34,9 @@ on:
       platforms:
         description: "Target platforms"
         default: linux/amd64
+      base_tag:
+        description: "Upstream hermes-agent tag to build on (blank = the git tag when run on one, else latest)"
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -98,15 +107,38 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Check the push target is configured
-        # Only matters when we are actually going to push. Failing here beats
-        # building for ten minutes and falling over at the login step.
+      - name: Check the push configuration is complete
+        # Every value the push needs is checked here, before the build, because
+        # the alternative is what it replaced: a ten-minute build followed by
+        # `Error: Username and password required` from the login action, which
+        # names neither the missing setting nor where to put it.
         if: github.event_name != 'pull_request'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          if [ -z "${DOCKERHUB_REPOSITORY}" ]; then
-            echo "::error::DOCKERHUB_REPOSITORY is not set in either store. Add it under Settings -> Secrets and variables -> Actions, in the *Variables* tab (preferred) or the *Secrets* tab, as e.g. damyr/hermes-agent. Note the two tabs are separate: a value in one is invisible to the other."
+          missing=""
+          [ -n "${DOCKERHUB_REPOSITORY}" ] || missing="${missing} DOCKERHUB_REPOSITORY"
+          [ -n "${DOCKERHUB_USERNAME}" ]   || missing="${missing} DOCKERHUB_USERNAME"
+          [ -n "${DOCKERHUB_TOKEN}" ]      || missing="${missing} DOCKERHUB_TOKEN"
+
+          if [ -n "${missing}" ]; then
+            echo "::error::Not set:${missing}. Add them under Settings -> Secrets and variables -> Actions. DOCKERHUB_USERNAME and DOCKERHUB_TOKEN must be in the *Secrets* tab (they are credentials); DOCKERHUB_REPOSITORY may be in either tab. The two tabs are separate namespaces -- a value in one is invisible to the other -- and a secret defined on an *Environment* rather than the repository is invisible unless the job declares that environment."
+            echo ""
+            echo "Present:"
+            echo "  DOCKERHUB_REPOSITORY : $([ -n "${DOCKERHUB_REPOSITORY}" ] && echo yes || echo NO)"
+            echo "  DOCKERHUB_USERNAME   : $([ -n "${DOCKERHUB_USERNAME}" ] && echo yes || echo NO)"
+            echo "  DOCKERHUB_TOKEN      : $([ -n "${DOCKERHUB_TOKEN}" ] && echo yes || echo NO)"
             exit 1
           fi
+
+          # A Docker Hub access token starts with dckr_pat_. An account password
+          # here would fail at login with 2FA enabled, and the login action's
+          # error does not distinguish the two cases.
+          case "${DOCKERHUB_TOKEN}" in
+            dckr_pat_*|dckr_oat_*) ;;
+            *) echo "::warning::DOCKERHUB_TOKEN does not look like a Docker Hub access token (expected a dckr_pat_ prefix). If this is an account password it will fail when 2FA is enabled -- create a token at https://app.docker.com/settings/personal-access-tokens with the Read & Write scope." ;;
+          esac
 
           if [ -z "${DOCKERHUB_REPOSITORY_FROM_VAR}" ]; then
             # Secrets are masked in logs, so the image name will render as ***
@@ -123,6 +155,62 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      - name: Resolve the upstream tag this build sits on
+        id: base
+        env:
+          # Via env, not `${{ }}` inside the script: a ref name is attacker-
+          # shaped input for anyone who can push a tag, and interpolating it
+          # into shell source is how that becomes command execution.
+          INPUT_BASE_TAG: ${{ inputs.base_tag }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          BASE: docker.io/nousresearch/hermes-agent
+        run: |
+          set -euo pipefail
+
+          # The whole tag policy, in one place:
+          #   push to main / a PR -> upstream `latest`, published as `latest`
+          #   push of a `v*` tag  -> upstream's identically named tag,
+          #                          published under that same name
+          # A manual run can override the first half without touching the git
+          # history, which is also the escape hatch for rebuilding an old
+          # release against a newer base.
+          case "${REF}" in
+            refs/tags/*) is_release=true ;;
+            *)           is_release=false ;;
+          esac
+
+          if [ -n "${INPUT_BASE_TAG}" ]; then
+            tag="${INPUT_BASE_TAG}"
+          elif [ "${is_release}" = true ]; then
+            tag="${REF_NAME}"
+          else
+            tag="latest"
+          fi
+
+          # Resolve now, once. Both builds below -- the one that gets verified
+          # and the one that gets pushed -- then reference the same immutable
+          # digest, so an upstream push landing between them cannot make us
+          # verify one image and ship another. It also turns a typo'd release
+          # tag into a named failure here instead of a `manifest unknown` from
+          # deep inside a build step ten minutes later.
+          if ! digest=$(docker buildx imagetools inspect "${BASE}:${tag}" \
+                          --format '{{.Manifest.Digest}}' 2>&1); then
+            echo "::error::No such upstream image: ${BASE}:${tag}"
+            echo "${digest}"
+            if [ "${is_release}" = true ]; then
+              echo "::error::A v* git tag is built from the upstream tag of the same name, so ${REF_NAME} must exist at https://hub.docker.com/r/nousresearch/hermes-agent/tags before it can be released here. Delete the tag, or re-run this workflow with base_tag set to an upstream tag that does exist."
+            fi
+            exit 1
+          fi
+
+          {
+            echo "tag=${tag}"
+            echo "digest=${digest}"
+            echo "is_release=${is_release}"
+          } >> "$GITHUB_OUTPUT"
+          echo "building on ${BASE}:${tag} (${digest})"
+
       # ── Build for the runner's own arch and load it, so the image can
       #    actually be executed by the verify step below. A multi-platform
       #    build produces a manifest list, which `--load` cannot handle, hence
@@ -132,7 +220,10 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
-          build-args: RTK_SHIM_LEVEL=${{ env.SHIM_LEVEL }}
+          build-args: |
+            RTK_SHIM_LEVEL=${{ env.SHIM_LEVEL }}
+            HERMES_BASE_TAG=${{ steps.base.outputs.tag }}
+            HERMES_BASE_PIN=@${{ steps.base.outputs.digest }}
           tags: hermes-agent-rtk:ci
           load: true
           push: false
@@ -209,9 +300,19 @@ jobs:
         with:
           images: ${{ env.DOCKERHUB_REPOSITORY }}
           tags: |
+            # A push to main publishes `latest`, built on upstream `latest`.
             type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            # A `v*` git tag publishes that tag verbatim, built on upstream's
+            # tag of the same name. Deliberately not `type=semver`: upstream is
+            # calver and some tags have four components (v2026.8.16.2), which
+            # is not valid semver, so semver patterns would drop them and
+            # `{{version}}` would also strip the `v` that upstream uses --
+            # breaking the one property this is for, that the two tags match.
+            type=ref,event=tag
+            # Same rule for a manual run against a tag ref, where `event=tag`
+            # does not fire because the event is workflow_dispatch.
+            type=raw,value=${{ github.ref_name }},enable=${{ github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/') }}
+            # Immutable pointer at the exact commit, on every build.
             type=sha,format=short
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
@@ -222,7 +323,10 @@ jobs:
         with:
           context: .
           platforms: ${{ env.PLATFORMS }}
-          build-args: RTK_SHIM_LEVEL=${{ env.SHIM_LEVEL }}
+          build-args: |
+            RTK_SHIM_LEVEL=${{ env.SHIM_LEVEL }}
+            HERMES_BASE_TAG=${{ steps.base.outputs.tag }}
+            HERMES_BASE_PIN=@${{ steps.base.outputs.digest }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
@@ -237,6 +341,9 @@ jobs:
 
       - name: Summary
         if: github.event_name != 'pull_request'
+        env:
+          BASE_TAG: ${{ steps.base.outputs.tag }}
+          BASE_DIGEST: ${{ steps.base.outputs.digest }}
         run: |
           {
             echo "### Pushed"
@@ -244,6 +351,8 @@ jobs:
             echo '```'
             echo "${{ steps.meta.outputs.tags }}"
             echo '```'
+            echo
+            echo "Built on \`nousresearch/hermes-agent:${BASE_TAG}\` (\`${BASE_DIGEST}\`)"
             echo
             echo "Platforms: \`${PLATFORMS}\` · shim level: \`${SHIM_LEVEL}\`"
           } >> "$GITHUB_STEP_SUMMARY"

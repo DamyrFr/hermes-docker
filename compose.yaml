@@ -19,9 +19,13 @@ services:
         # `safe` shims developer tooling only. See scripts/install-shims.sh
         # before reaching for `aggressive`.
         RTK_SHIM_LEVEL: "${RTK_SHIM_LEVEL:-safe}"
-      # No `pull: true`. The base is pinned by digest, so there is nothing to
-      # refresh: either the digest is in the local store or the build fetches
-      # exactly it.
+        # Upstream tag to build on. `latest` locally; CI passes the git tag on
+        # a release build so the two tags name the same upstream release.
+        HERMES_BASE_TAG: "${HERMES_BASE_TAG:-latest}"
+      # The base is a floating tag now, not a digest, so a local rebuild would
+      # otherwise keep using whatever `latest` resolved to the first time it
+      # was pulled. Costs one registry round-trip per build.
+      pull: true
     image: "${HERMES_IMAGE:-hermes-agent-rtk:latest}"
     container_name: "${HERMES_CONTAINER_NAME:-hermes}"
     command: gateway run

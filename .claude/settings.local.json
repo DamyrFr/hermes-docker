@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk proxy *)",
+      "Bash(echo \"=== EXIT:$? ===\")",
+      "Bash(git -C /home/damyr/Workspace/hermes-docker status --porcelain)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:hermes-agent.nousresearch.com)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(rtk run *)",
+      "Bash(echo \"healthcheck exit=$?\")",
+      "Bash(echo \"exit=$?\")",
+      "Bash(rm -f /tmp/rb3.log)",
+      "Bash(rtk git *)",
+      "Bash(/tmp/docker-compose config *)",
+      "Bash(echo \"COMPOSE CONFIG EXIT=$?\")",
+      "Bash(exit 1)",
+      "Bash(echo \"ACTIONLINT EXIT=$?\")"
+    ]
+  }
+}

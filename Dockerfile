@@ -16,17 +16,36 @@
 # file is not the hardened thing.
 # ─────────────────────────────────────────────────────────────
 
-# Pinned to the multi-arch index digest, not :latest. `docker build --pull`
-# against a floating tag silently changes the base under you; a digest makes
-# the build reproducible and turns a base bump into a reviewable diff.
-# Refresh with `make base-digest`.
+# Which upstream image to build on, and at which tag.
+#
+# `latest` by default: a push to main builds on upstream's latest and publishes
+# ours as `latest`. A release build passes the git tag instead, so `v2026.8.31`
+# of this image is built from `nousresearch/hermes-agent:v2026.8.31` and the
+# two tags name the same upstream release. Nothing here has to be edited for
+# that -- CI derives the tag from the ref it was triggered on.
+#
+# HERMES_BASE_PIN is empty by default and, when set, holds `@sha256:...` --
+# the `@` included -- for a caller that has already resolved the tag to a
+# digest. CI resolves it once and passes the same value to the verify build and
+# the push build, so a tag that moves upstream between the two cannot leave us
+# verifying one image and shipping another. `make base-digest BASE_TAG=<tag>`
+# prints the digest to build one out of.
+#
 # Registry spelled out rather than left as a short name: Docker would infer
 # docker.io, but Podman refuses to guess, and an explicit registry is one fewer
 # thing a search-registry setting can redirect.
 ARG HERMES_BASE=docker.io/nousresearch/hermes-agent
-ARG HERMES_BASE_DIGEST=sha256:7515a2c7448ec9c8ae0b87ce155ece15e1b2b5a24e7416e7f4d50f84b31f5fe6
+ARG HERMES_BASE_TAG=latest
+ARG HERMES_BASE_PIN=
 
-FROM ${HERMES_BASE}@${HERMES_BASE_DIGEST}
+FROM ${HERMES_BASE}:${HERMES_BASE_TAG}${HERMES_BASE_PIN}
+
+# An ARG declared above the first FROM is visible to FROM lines and nowhere
+# else. Re-declare the three the LABEL block at the bottom interpolates --
+# without this they expand to the empty string there, silently.
+ARG HERMES_BASE
+ARG HERMES_BASE_TAG
+ARG HERMES_BASE_PIN
 
 # Upstream's entrypoint starts s6-overlay as root PID 1 and drops to UID 10000
 # itself. Pinning a USER at the end of this file would break that, so every
@@ -115,8 +134,7 @@ RUN /tmp/install-shims.sh "${RTK_SHIM_LEVEL}" \
 
 LABEL org.opencontainers.image.title="hermes-agent-damyr" \
       org.opencontainers.image.description="Nous Research Hermes agent with rtk output filtering and a hardened runtime posture" \
-      org.opencontainers.image.base.name="${HERMES_BASE}" \
-      org.opencontainers.image.base.digest="${HERMES_BASE_DIGEST}" \
+      org.opencontainers.image.base.name="${HERMES_BASE}:${HERMES_BASE_TAG}${HERMES_BASE_PIN}" \
       org.opencontainers.image.source="https://github.com/rtk-ai/rtk" \
       org.opencontainers.image.licenses="Apache-2.0" \
       fr.anvir.rtk.version="${RTK_VERSION}" \

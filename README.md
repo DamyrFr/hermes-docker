@@ -75,8 +75,13 @@ in the data volume, so it survives a container recreate.
 
 **Build time** (`Dockerfile`)
 
-- Base image pinned by **multi-arch digest** instead of `:latest`, so a rebuild
-  cannot silently swap the base. `make base-digest` prints the current one.
+- Base image tracked **by tag, resolved to a digest before the build**. The tag
+  follows the release: `latest` normally, and the git tag itself on a release
+  build, so `v2026.8.31` of this image is built on
+  `nousresearch/hermes-agent:v2026.8.31`. CI resolves that tag to a digest once
+  and hands the same digest to the verify build and the push build, so an
+  upstream push landing mid-run cannot make it verify one image and ship
+  another. `make base-digest` prints the digest for any tag.
 - rtk pinned to a version **and a SHA-256**, downloaded from GitHub releases
   rather than piping upstream's `install.sh` into a shell.
 - Python packages pinned (`ddgs==9.15.0`, previously unpinned — and note that
@@ -158,10 +163,35 @@ workflow prints a warning when it had to fall back to the secret.
 Create the token at Docker Hub → Account Settings → Personal access tokens,
 scoped **Read & Write** — nothing here needs Delete.
 
-Tags produced: `latest` on `main`, `sha-<short>` on every push, and
-`v1.2.3` / `1.2` from a `v*` git tag. Builds attach **provenance and an SBOM**,
-which is what makes the digest-and-checksum pinning checkable by whoever pulls
-the image rather than only by whoever built it.
+### Tags
+
+| You push | Built on | Published as |
+| --- | --- | --- |
+| a commit to `main` | `nousresearch/hermes-agent:latest` | `latest`, `sha-<short>` |
+| the git tag `v2026.8.31` | `nousresearch/hermes-agent:v2026.8.31` | `v2026.8.31`, `sha-<short>` |
+
+A release is therefore just a git tag named after the upstream tag you want to
+build on:
+
+```sh
+git tag v2026.8.31 && git push origin v2026.8.31
+```
+
+The tag is used **verbatim** on both ends — the point is that your `v2026.8.31`
+and upstream's are the same release, so nothing normalises it. That rules out
+`type=semver` in the workflow, which would strip the `v` and drop four-part
+tags like `v2026.8.16.2` entirely; upstream is calver, not semver.
+
+Tag something upstream does not publish and the run fails in its first minute,
+naming the tag, rather than deep inside a build. Two caveats worth knowing:
+a `v*` tag on a docs-only commit is skipped by `paths-ignore`, and a release
+does **not** move `latest` — `latest` follows `main`, as it does upstream.
+Either case is covered by running the workflow manually against the tag ref,
+which also takes a *base tag* input for rebuilding an old release on a newer
+base.
+
+Builds attach **provenance and an SBOM**, which is what makes the pinning
+checkable by whoever pulls the image rather than only by whoever built it.
 
 Builds are `linux/amd64` by default — what the VPS runs and what the image is
 tested on. arm64 works (`install-rtk.sh` handles it, the base is multi-arch)
@@ -176,7 +206,8 @@ the base image's licence notice intact.
 ## Maintenance
 
 ```sh
-make base-digest    # current upstream digest -> paste into Dockerfile
+make base-digest                    # digest of upstream :latest
+make base-digest BASE_TAG=v2026.8.31  # ... or of a specific tag
 make rtk-digest     # latest rtk tag + checksums -> paste into install-rtk.sh
 make lint           # compose config + shellcheck
 make verify         # smoke-test the built image
