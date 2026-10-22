@@ -303,10 +303,11 @@ jobs:
             # A push to main publishes `latest`, built on upstream `latest`.
             type=raw,value=latest,enable={{is_default_branch}}
             # A `v*` git tag publishes that tag verbatim, built on upstream's
-            # tag of the same name. Deliberately not `type=semver`: upstream is
-            # calver and some tags have four components (v2026.8.16.2), which
-            # is not valid semver, so semver patterns would drop them and
-            # `{{version}}` would also strip the `v` that upstream uses --
+            # tag of the same name. Deliberately not `type=semver`: upstream
+            # was calver until v2026.9.24 and some of those tags have four
+            # components (v2026.8.16.2), which is not valid semver, so semver
+            # patterns would drop them and `{{version}}` would also strip the
+            # `v` that upstream uses --
             # breaking the one property this is for, that the two tags match.
             type=ref,event=tag
             # Same rule for a manual run against a tag ref, where `event=tag`

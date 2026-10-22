@@ -77,16 +77,17 @@ in the data volume, so it survives a container recreate.
 
 - Base image tracked **by tag, resolved to a digest before the build**. The tag
   follows the release: `latest` normally, and the git tag itself on a release
-  build, so `v2026.8.31` of this image is built on
-  `nousresearch/hermes-agent:v2026.8.31`. CI resolves that tag to a digest once
+  build, so `v0.22.3` of this image is built on
+  `nousresearch/hermes-agent:v0.22.3`. CI resolves that tag to a digest once
   and hands the same digest to the verify build and the push build, so an
   upstream push landing mid-run cannot make it verify one image and ship
   another. `make base-digest` prints the digest for any tag.
 - rtk pinned to a version **and a SHA-256**, downloaded from GitHub releases
   rather than piping upstream's `install.sh` into a shell.
-- Python packages pinned (`ddgs==9.15.0`, previously unpinned — and note that
-  this is *not* PyPI's latest, which does not resolve against the image's
-  Python 3.13).
+- Python packages pinned (`ddgs==9.15.0`, previously unpinned). Installed with
+  a pinned `uv` that is bind-mounted for that one build step: upstream stopped
+  shipping `uv` (and the venv has no `pip`) as of `v0.22.x`, and the mount
+  keeps the installer out of the final image.
 - **setuid/setgid bits stripped** from every binary in the image. Nothing in
   the boot path needs them — s6-overlay drops privileges with its own tooling —
   and they are the readiest escalation path for anything that gets code
@@ -168,19 +169,27 @@ scoped **Read & Write** — nothing here needs Delete.
 | You push | Built on | Published as |
 | --- | --- | --- |
 | a commit to `main` | `nousresearch/hermes-agent:latest` | `latest`, `sha-<short>` |
-| the git tag `v2026.8.31` | `nousresearch/hermes-agent:v2026.8.31` | `v2026.8.31`, `sha-<short>` |
+| the git tag `v0.22.3` | `nousresearch/hermes-agent:v0.22.3` | `v0.22.3`, `sha-<short>` |
 
 A release is therefore just a git tag named after the upstream tag you want to
 build on:
 
 ```sh
-git tag v2026.8.31 && git push origin v2026.8.31
+git tag v0.22.3 && git push origin v0.22.3
 ```
 
-The tag is used **verbatim** on both ends — the point is that your `v2026.8.31`
+Check the name against [upstream's tags](https://hub.docker.com/r/nousresearch/hermes-agent/tags)
+first — `make base-digest BASE_TAG=v0.22.3` does it from the shell. Upstream
+switched schemes in October 2026: releases up to `v2026.9.24` were date-based
+(calver), from `v0.22.2` on they are `v0.MINOR.PATCH`. A date-style tag such
+as `v2026.10.15` no longer exists upstream and cannot be released here. Ignore
+the `rc.*`, `stable` and `*-desktop` tags upstream also publishes; build on
+the plain `vX.Y.Z` ones.
+
+The tag is used **verbatim** on both ends — the point is that your `v0.22.3`
 and upstream's are the same release, so nothing normalises it. That rules out
-`type=semver` in the workflow, which would strip the `v` and drop four-part
-tags like `v2026.8.16.2` entirely; upstream is calver, not semver.
+`type=semver` in the workflow: it would strip the `v`, and it would drop the
+four-part calver tags (`v2026.8.16.2`) that older releases used.
 
 Tag something upstream does not publish and the run fails in its first minute,
 naming the tag, rather than deep inside a build. Two caveats worth knowing:
@@ -207,7 +216,7 @@ the base image's licence notice intact.
 
 ```sh
 make base-digest                    # digest of upstream :latest
-make base-digest BASE_TAG=v2026.8.31  # ... or of a specific tag
+make base-digest BASE_TAG=v0.22.3    # ... or of a specific tag
 make rtk-digest     # latest rtk tag + checksums -> paste into install-rtk.sh
 make lint           # compose config + shellcheck
 make verify         # smoke-test the built image

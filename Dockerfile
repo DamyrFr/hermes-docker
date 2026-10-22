@@ -19,8 +19,8 @@
 # Which upstream image to build on, and at which tag.
 #
 # `latest` by default: a push to main builds on upstream's latest and publishes
-# ours as `latest`. A release build passes the git tag instead, so `v2026.8.31`
-# of this image is built from `nousresearch/hermes-agent:v2026.8.31` and the
+# ours as `latest`. A release build passes the git tag instead, so `v0.22.3`
+# of this image is built from `nousresearch/hermes-agent:v0.22.3` and the
 # two tags name the same upstream release. Nothing here has to be edited for
 # that -- CI derives the tag from the ref it was triggered on.
 #
@@ -77,11 +77,18 @@ RUN RTK_VERSION="${RTK_VERSION}" TARGETARCH="${TARGETARCH}" \
 # rebuilt image is an unreviewed code change reaching an agent that has a
 # shell. Bump it on purpose.
 #
-# 9.15.0, not the 9.16.0 that PyPI calls latest: 9.16.0 does not resolve
-# against this image's Python 3.13 and uv silently settles on 9.15.0 when left
-# unpinned. Pinning the resolved version is what makes that visible.
+# 9.15.0 was picked when the base ran Python 3.13, where 9.16.0 did not
+# resolve. Since v0.22.x the base is on Python 3.14 and 9.16.0 resolves too;
+# moving to it is a deliberate bump, not something to let drift in.
+#
+# uv is bind-mounted for this one step rather than taken from the base:
+# upstream shipped /usr/local/bin/uv up to v2026.9.24 and dropped it in v0.22.x
+# (the venv has no pip either), so relying on it fails with exit 127. A mount
+# also keeps the installer out of the final image -- nothing at runtime needs
+# it. Pinned to the uv the base used to ship.
 ARG HERMES_EXTRA_PYTHON_PACKAGES="ddgs==9.15.0"
-RUN if [ -n "${HERMES_EXTRA_PYTHON_PACKAGES}" ]; then \
+RUN --mount=from=ghcr.io/astral-sh/uv:0.11.6,source=/uv,target=/usr/local/bin/uv \
+    if [ -n "${HERMES_EXTRA_PYTHON_PACKAGES}" ]; then \
       uv pip install --python /opt/hermes/.venv --no-cache ${HERMES_EXTRA_PYTHON_PACKAGES}; \
     fi
 
