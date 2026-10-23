@@ -35,10 +35,11 @@ in this container that depend on their exact output. Call them explicitly.
 1. Prefer the rtk form when you only need to *understand* output. Use the raw
    command when you need its exact bytes — parsing, piping into another tool,
    or writing the result to a file.
-2. `rtk proxy '<cmd>'` runs a command unfiltered but still records it, which is
-   the right choice when a filter is getting in the way.
+2. `rtk bypass '<cmd>'` runs a command unfiltered but still records it, which is
+   the right choice when a filter is getting in the way. (`rtk proxy` is the
+   pre-1.0 name and still works as an alias.)
 3. Never pipe a shimmed command into something that parses fixed columns
-   (`git status | awk '{print $2}'`). Use `rtk proxy` or `--porcelain` instead.
+   (`git status | awk '{print $2}'`). Use `rtk bypass` or `--porcelain` instead.
 4. `rtk gain` reports how many tokens the filtering has saved so far.
 
 ## Safety

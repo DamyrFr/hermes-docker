@@ -147,6 +147,24 @@ services:
 
     shm_size: "${HERMES_SHM_SIZE:-256m}"
 
+    # ── Healthcheck ────────────────────────────────────────────
+    # Same probe, same timings as the image's HEALTHCHECK, restated here
+    # because a healthcheck stored in the image config does not survive every
+    # path a build can take: the OCI image format has no field for it, and a
+    # builder that emits OCI (Podman does; this stack builds with buildx, but
+    # nothing here should depend on that) drops it with a warning. The
+    # compose-level form is format-independent, shows up in `docker compose
+    # ps`, and overrides the image's -- so it is the one that governs the
+    # running container. Keep the two in sync.
+    healthcheck:
+      test: ["CMD", "/opt/rtk/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 6s
+      # start-period generous: a cold start pulls model config, migrates the
+      # session store and brings up s6 services before anything listens.
+      start_period: 180s
+      retries: 3
+
     # Every resource ceiling lives here, in one block. The top-level
     # `pids_limit:` spelling is the same setting as `deploy.resources.limits.pids`
     # and Compose refuses a project that sets both -- so this file uses the

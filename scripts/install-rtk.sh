@@ -14,16 +14,23 @@ RTK_PREFIX="${RTK_PREFIX:-/opt/rtk}"
 # `docker build` on the target machine still works.
 TARGETARCH="${TARGETARCH:-$(dpkg --print-architecture)}"
 
+# The -oss edition. Since 1.0 the default rtk binary bundles the compression
+# engine under BUSL-1.1; rtk-oss is Apache-2.0 only -- hook core and every
+# command filter, no engine -- and is the edition that keeps this image's
+# licenses label true and its public push unambiguous. Everything this stack
+# does with rtk is command filtering (the PATH shims and the verbs in
+# AGENTS.md), which the oss edition has in full.
+#
 # Upstream ships a musl build for x86_64 (fully static, no libc coupling to the
 # Debian base) but only a glibc build for aarch64. Both run on debian:13.
 case "$TARGETARCH" in
   amd64)
-    asset="rtk-x86_64-unknown-linux-musl.tar.gz"
-    sha256="79aa5b89c69566bbfeceb66c8a27cfbe52237fc7ee3e683115f43745a3262d21"
+    asset="rtk-oss-x86_64-unknown-linux-musl.tar.gz"
+    sha256="a44e8ffc43981100b4ddf1710399a1649a6c874591aa6d0c0727fe6cbd983c41"
     ;;
   arm64)
-    asset="rtk-aarch64-unknown-linux-gnu.tar.gz"
-    sha256="e8c2e1787f46017ea7c5a711b2bc6a7f7cf61c7ad69385b4c1e4daff1135dcd1"
+    asset="rtk-oss-aarch64-unknown-linux-gnu.tar.gz"
+    sha256="ee24a43dac9162de55fea8460b5efcd56d401ec28b5117c921bffa8a57bc136e"
     ;;
   *)
     echo "install-rtk: unsupported architecture '$TARGETARCH'" >&2
@@ -33,7 +40,7 @@ esac
 
 # The checksums above are for one specific release. Refusing to guess at any
 # other version is the whole point of pinning -- see `make rtk-digest`.
-if [ "$RTK_VERSION" != "0.46.0" ]; then
+if [ "$RTK_VERSION" != "1.0.1" ]; then
   echo "install-rtk: no recorded checksum for rtk $RTK_VERSION." >&2
   echo "  Update the sha256 values in this script from" >&2
   echo "  https://github.com/rtk-ai/rtk/releases/download/v${RTK_VERSION}/checksums.txt" >&2

@@ -7,7 +7,9 @@
 #   1. rtk (github.com/rtk-ai/rtk) -- pinned, checksum-verified -- plus PATH
 #      shims that route selected commands through it, because Hermes has no
 #      PreToolUse hook to rewrite commands the way Claude Code does.
-#   2. The agent's extra Python packages, version-pinned.
+#   2. The agent's extra packages, version-pinned: libopus0 from the Debian
+#      suite, plus the Python packages in the agent's virtualenv -- the voice
+#      pair faster-whisper and edge-tts among them.
 #   3. Build-time attack-surface reduction: setuid/setgid bits stripped.
 #
 # What is deliberately NOT here: capabilities, no-new-privileges, pids limits,
@@ -57,7 +59,7 @@ USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # ── rtk ──────────────────────────────────────────────────────
-ARG RTK_VERSION=0.46.0
+ARG RTK_VERSION=1.0.1
 # Set by buildx; install-rtk.sh falls back to dpkg when building without it.
 ARG TARGETARCH
 
@@ -65,6 +67,17 @@ COPY --chmod=0755 scripts/install-rtk.sh /tmp/install-rtk.sh
 RUN RTK_VERSION="${RTK_VERSION}" TARGETARCH="${TARGETARCH}" \
       /tmp/install-rtk.sh \
     && rm -f /tmp/install-rtk.sh
+
+# ── Extra system packages ────────────────────────────────────
+# libopus0, the Opus codec library the agent's voice path loads to encode and
+# decode audio. Absent from the base image as of v0.22.3, and nothing below
+# pulls it in either -- every wheel in the Python stack bundles its own copies
+# of the libraries it needs -- so it is installed explicitly rather than left
+# to arrive as someone's side effect. Versioning comes from the suite: the
+# base is Debian 13 (trixie), which ships exactly one libopus.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libopus0 \
+    && rm -rf /var/lib/apt/lists/*
 
 # ── Extra Python packages ────────────────────────────────────
 # Installed into the agent's own virtualenv. That venv's bin/ is already ahead
@@ -81,12 +94,19 @@ RUN RTK_VERSION="${RTK_VERSION}" TARGETARCH="${TARGETARCH}" \
 # resolve. Since v0.22.x the base is on Python 3.14 and 9.16.0 resolves too;
 # moving to it is a deliberate bump, not something to let drift in.
 #
+# The voice pair exists for the agent's speech loop: faster-whisper turns
+# audio into text through CTranslate2 (no system ffmpeg needed -- PyAV bundles
+# the decode libraries), and edge-tts turns text back into speech through
+# Microsoft Edge's online service. Both were resolved against the venv's
+# Python 3.14 before pinning: every wheel in their trees, `av` and
+# `onnxruntime` included, has a build that satisfies it.
+#
 # uv is bind-mounted for this one step rather than taken from the base:
 # upstream shipped /usr/local/bin/uv up to v2026.9.24 and dropped it in v0.22.x
 # (the venv has no pip either), so relying on it fails with exit 127. A mount
 # also keeps the installer out of the final image -- nothing at runtime needs
 # it. Pinned to the uv the base used to ship.
-ARG HERMES_EXTRA_PYTHON_PACKAGES="ddgs==9.15.0"
+ARG HERMES_EXTRA_PYTHON_PACKAGES="ddgs==9.15.0 edge-tts==7.3.1 faster-whisper==1.2.1"
 RUN --mount=from=ghcr.io/astral-sh/uv:0.11.6,source=/uv,target=/usr/local/bin/uv \
     if [ -n "${HERMES_EXTRA_PYTHON_PACKAGES}" ]; then \
       uv pip install --python /opt/hermes/.venv --no-cache ${HERMES_EXTRA_PYTHON_PACKAGES}; \
@@ -113,6 +133,10 @@ COPY --chmod=0755 scripts/healthcheck.sh /opt/rtk/bin/healthcheck.sh
 
 # start-period is generous because a cold start pulls model config, migrates
 # the session store and brings up s6 services before anything listens.
+#
+# Mirrored as a compose-level healthcheck in compose.yaml, which overrides
+# this one when the stack runs under Compose and survives the OCI image
+# format's lack of a healthcheck field -- keep the two in sync.
 HEALTHCHECK --interval=30s --timeout=6s --start-period=180s --retries=3 \
     CMD ["/opt/rtk/bin/healthcheck.sh"]
 

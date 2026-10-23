@@ -66,6 +66,14 @@ verify: ## Smoke-test rtk and the shims inside the built image
 	@test -z "$$(docker run --rm --entrypoint sh $(IMAGE) -c 'find / -xdev -type f -perm /6000 2>/dev/null')" \
 	    && echo "OK: no setuid/setgid binaries" \
 	    || { echo "FAIL: setuid binaries present"; exit 1; }
+	@echo "== extra system package: libopus0 =="
+	@docker run --rm --entrypoint sh $(IMAGE) -c 'ldconfig -p 2>/dev/null | grep -q libopus.so.0' \
+	    && echo "OK: libopus present" \
+	    || { echo "FAIL: libopus0 missing; the apt-get step in the Dockerfile did not run"; exit 1; }
+	@echo "== extra Python packages import in the agent venv =="
+	@docker run --rm --entrypoint /opt/hermes/.venv/bin/python $(IMAGE) -c 'import ddgs, faster_whisper, edge_tts' \
+	    && echo "OK: ddgs, faster-whisper and edge-tts import" \
+	    || { echo "FAIL: an extra Python package is broken; check HERMES_EXTRA_PYTHON_PACKAGES in the Dockerfile"; exit 1; }
 
 base-digest: ## Resolve an upstream tag to its digest (BASE_TAG=latest)
 	@curl -sS https://hub.docker.com/v2/repositories/nousresearch/hermes-agent/tags/$(BASE_TAG) \

@@ -83,11 +83,18 @@ in the data volume, so it survives a container recreate.
   upstream push landing mid-run cannot make it verify one image and ship
   another. `make base-digest` prints the digest for any tag.
 - rtk pinned to a version **and a SHA-256**, downloaded from GitHub releases
-  rather than piping upstream's `install.sh` into a shell.
-- Python packages pinned (`ddgs==9.15.0`, previously unpinned). Installed with
-  a pinned `uv` that is bind-mounted for that one build step: upstream stopped
-  shipping `uv` (and the venv has no `pip`) as of `v0.22.x`, and the mount
-  keeps the installer out of the final image.
+  rather than piping upstream's `install.sh` into a shell. The **`rtk-oss`
+  edition**: since 1.0 the default `rtk` binary bundles a BUSL-1.1 engine,
+  while `rtk-oss` is Apache-2.0 only and carries every command filter — which
+  is all this stack uses — keeping the image's `licenses` label true.
+- Python packages pinned (`ddgs==9.15.0`, previously unpinned; plus the voice
+  pair `faster-whisper==1.2.1` and `edge-tts==7.3.1`). Installed with a pinned
+  `uv` that is bind-mounted for that one build step: upstream stopped shipping
+  `uv` (and the venv has no `pip`) as of `v0.22.x`, and the mount keeps the
+  installer out of the final image.
+- `libopus0` (the Opus codec library) installed from the Debian suite for the
+  agent's voice path — the base image does not ship it, and the Python wheels
+  bundle their own copies of everything else they need.
 - **setuid/setgid bits stripped** from every binary in the image. Nothing in
   the boot path needs them — s6-overlay drops privileges with its own tooling —
   and they are the readiest escalation path for anything that gets code
