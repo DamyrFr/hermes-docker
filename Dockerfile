@@ -21,8 +21,8 @@
 # Which upstream image to build on, and at which tag.
 #
 # `latest` by default: a push to main builds on upstream's latest and publishes
-# ours as `latest`. A release build passes the git tag instead, so `v0.22.3`
-# of this image is built from `nousresearch/hermes-agent:v0.22.3` and the
+# ours as `latest`. A release build passes the git tag instead, so `v0.22.5`
+# of this image is built from `nousresearch/hermes-agent:v0.22.5` and the
 # two tags name the same upstream release. Nothing here has to be edited for
 # that -- CI derives the tag from the ref it was triggered on.
 #
@@ -70,7 +70,7 @@ RUN RTK_VERSION="${RTK_VERSION}" TARGETARCH="${TARGETARCH}" \
 
 # ── Extra system packages ────────────────────────────────────
 # libopus0, the Opus codec library the agent's voice path loads to encode and
-# decode audio. Absent from the base image as of v0.22.3, and nothing below
+# decode audio. Absent from the base image as of v0.22.5, and nothing below
 # pulls it in either -- every wheel in the Python stack bundles its own copies
 # of the libraries it needs -- so it is installed explicitly rather than left
 # to arrive as someone's side effect. Versioning comes from the suite: the
@@ -106,7 +106,7 @@ RUN apt-get update \
 # (the venv has no pip either), so relying on it fails with exit 127. A mount
 # also keeps the installer out of the final image -- nothing at runtime needs
 # it. Pinned to the uv the base used to ship.
-ARG HERMES_EXTRA_PYTHON_PACKAGES="ddgs==9.15.0 edge-tts==7.3.1 faster-whisper==1.2.1"
+ARG HERMES_EXTRA_PYTHON_PACKAGES="ddgs==9.15.0 edge-tts==7.3.1 faster-whisper==1.2.1 av==18.1.0"
 RUN --mount=from=ghcr.io/astral-sh/uv:0.11.6,source=/uv,target=/usr/local/bin/uv \
     if [ -n "${HERMES_EXTRA_PYTHON_PACKAGES}" ]; then \
       uv pip install --python /opt/hermes/.venv --no-cache ${HERMES_EXTRA_PYTHON_PACKAGES}; \

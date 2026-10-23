@@ -77,8 +77,8 @@ in the data volume, so it survives a container recreate.
 
 - Base image tracked **by tag, resolved to a digest before the build**. The tag
   follows the release: `latest` normally, and the git tag itself on a release
-  build, so `v0.22.3` of this image is built on
-  `nousresearch/hermes-agent:v0.22.3`. CI resolves that tag to a digest once
+  build, so `v0.22.5` of this image is built on
+  `nousresearch/hermes-agent:v0.22.5`. CI resolves that tag to a digest once
   and hands the same digest to the verify build and the push build, so an
   upstream push landing mid-run cannot make it verify one image and ship
   another. `make base-digest` prints the digest for any tag.
@@ -176,24 +176,24 @@ scoped **Read & Write** — nothing here needs Delete.
 | You push | Built on | Published as |
 | --- | --- | --- |
 | a commit to `main` | `nousresearch/hermes-agent:latest` | `latest`, `sha-<short>` |
-| the git tag `v0.22.3` | `nousresearch/hermes-agent:v0.22.3` | `v0.22.3`, `sha-<short>` |
+| the git tag `v0.22.5` | `nousresearch/hermes-agent:v0.22.5` | `v0.22.5`, `sha-<short>` |
 
 A release is therefore just a git tag named after the upstream tag you want to
 build on:
 
 ```sh
-git tag v0.22.3 && git push origin v0.22.3
+git tag v0.22.5 && git push origin v0.22.5
 ```
 
 Check the name against [upstream's tags](https://hub.docker.com/r/nousresearch/hermes-agent/tags)
-first — `make base-digest BASE_TAG=v0.22.3` does it from the shell. Upstream
+first — `make base-digest BASE_TAG=v0.22.5` does it from the shell. Upstream
 switched schemes in October 2026: releases up to `v2026.9.24` were date-based
 (calver), from `v0.22.2` on they are `v0.MINOR.PATCH`. A date-style tag such
 as `v2026.10.15` no longer exists upstream and cannot be released here. Ignore
 the `rc.*`, `stable` and `*-desktop` tags upstream also publishes; build on
 the plain `vX.Y.Z` ones.
 
-The tag is used **verbatim** on both ends — the point is that your `v0.22.3`
+The tag is used **verbatim** on both ends — the point is that your `v0.22.5`
 and upstream's are the same release, so nothing normalises it. That rules out
 `type=semver` in the workflow: it would strip the `v`, and it would drop the
 four-part calver tags (`v2026.8.16.2`) that older releases used.
@@ -223,7 +223,7 @@ the base image's licence notice intact.
 
 ```sh
 make base-digest                    # digest of upstream :latest
-make base-digest BASE_TAG=v0.22.3    # ... or of a specific tag
+make base-digest BASE_TAG=v0.22.5    # ... or of a specific tag
 make rtk-digest     # latest rtk tag + checksums -> paste into install-rtk.sh
 make lint           # compose config + shellcheck
 make verify         # smoke-test the built image
